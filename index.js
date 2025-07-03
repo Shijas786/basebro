@@ -34,21 +34,36 @@ async function getBalance(tokenAddress, userAddress, decimals = 6) {
   return ethers.formatUnits(bal, decimals);
 }
 
+function parseSendCommand(text) {
+  const parts = text.trim().split(' ');
+  return {
+    command: parts[0].toLowerCase(),
+    token: parts[1]?.toUpperCase(),
+    to: parts[2],
+    amount: parts[3]
+  };
+}
+
 // Webhook for WhatsApp messages
+app.get('/webhook', (req, res) => {
+  res.send('Webhook is active ✅');
+});
+
 app.post('/webhook', async (req, res) => {
   const incomingMsg = req.body.Body.trim();
   const from = req.body.From;
 
   console.log(`Received: "${incomingMsg}" from ${from}`);
-  let reply = '🤖 Welcome to BasePay Bot!';
+
+  let reply = '🤖 Welcome to BasePay Bot! Built on Base.';
 
   if (incomingMsg.toLowerCase() === '/start') {
     if (!wallets[from]) {
       const newWallet = ethers.Wallet.createRandom();
       wallets[from] = newWallet;
-      reply = `🎉 Wallet created!\nAddress: ${newWallet.address}`;
+      reply = `👋 Hello! Your wallet is being set up...\n🎉 Wallet created!\nAddress: ${newWallet.address}`;
     } else {
-      reply = '✅ Wallet already exists.';
+      reply = '✅ Wallet already exists. Use /help to see available commands.';
     }
   } else if (incomingMsg.toLowerCase() === '/balance') {
     if (!wallets[from]) {
@@ -62,89 +77,78 @@ app.post('/webhook', async (req, res) => {
       ]);
       reply = `💼 Balance for ${address}\nETH: ${eth}\nUSDC: ${usdc}\nUSDT: ${usdt}`;
     }
-  } else if (incomingMsg.toLowerCase().startsWith('/receive')) {
+  } else if (incomingMsg.toLowerCase() === '/receive') {
     if (!wallets[from]) {
       reply = '❌ You need to /start first to create your wallet.';
     } else {
       const addr = wallets[from].address;
-      const qr = await QRCode.toDataURL(addr);
       reply = `📥 Your address: ${addr}\n(Send tokens to this address)`;
     }
+  } else if (incomingMsg.toLowerCase() === '/help') {
+    reply = `📖 *BasePay Help Menu*\nCommands you can use:\n/start – Create your wallet\n/balance – Check your ETH, USDC, USDT balance\n/receive – Get your wallet address\n/send TOKEN ADDRESS AMOUNT – Send tokens\n/tip TOKEN AMOUNT – Tip a random user\n/rain TOKEN AMOUNT – Distribute tokens to all users\n/help – Show this menu`;
   } else if (incomingMsg.toLowerCase().startsWith('/send')) {
-    const parts = incomingMsg.split(' ');
-    if (parts.length !== 4) {
-      reply = '❌ Format: /send token address amount';
-    } else if (!wallets[from]) {
-      reply = '❌ You need to /start first to create your wallet.';
+    if (!wallets[from]) {
+      reply = '❌ You need to /start first.';
     } else {
-      const token = parts[1].toLowerCase();
-      const to = parts[2];
-      const amt = parts[3];
-      const wallet = wallets[from].connect(provider);
-      const contractAddr = token === 'usdc' ? USDC : token === 'usdt' ? USDT : null;
-      const decimals = 6;
-
-      if (!contractAddr) {
-        reply = '❌ Unsupported token. Use usdc or usdt.';
+      const { token, to, amount } = parseSendCommand(incomingMsg);
+      const sender = wallets[from].connect(provider);
+      const tokenAddress = token === 'USDC' ? USDC : token === 'USDT' ? USDT : null;
+      if (!tokenAddress || !ethers.isAddress(to)) {
+        reply = '❌ Invalid token or address format. Example: /send USDC 0xabc... 1.5';
       } else {
-        const contract = new ethers.Contract(contractAddr, ERC20_ABI, wallet);
-        const tx = await contract.transfer(to, ethers.parseUnits(amt, decimals));
-        reply = `✅ Sent ${amt} ${token.toUpperCase()} to ${to}\nTx: ${tx.hash}`;
+        try {
+          const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, sender);
+          const tx = await tokenContract.transfer(to, ethers.parseUnits(amount, 6));
+          await tx.wait();
+          reply = `✅ Sent ${amount} ${token} to ${to}`;
+        } catch (e) {
+          reply = `❌ Transaction failed: ${e.message}`;
+        }
       }
     }
   } else if (incomingMsg.toLowerCase().startsWith('/tip')) {
-    const parts = incomingMsg.split(' ');
-    if (parts.length !== 3) {
-      reply = '❌ Format: /tip token amount';
-    } else if (!wallets[from]) {
-      reply = '❌ You need to /start first to create your wallet.';
+    const { token, amount } = parseSendCommand(incomingMsg);
+    const users = Object.keys(wallets).filter(u => u !== from);
+    if (!wallets[from]) {
+      reply = '❌ You need to /start first.';
+    } else if (users.length === 0) {
+      reply = '⚠ No one to tip yet.';
     } else {
-      const token = parts[1].toLowerCase();
-      const amt = parts[2];
-      const contractAddr = token === 'usdc' ? USDC : token === 'usdt' ? USDT : null;
-      const decimals = 6;
-      const wallet = wallets[from].connect(provider);
-
-      if (!contractAddr) {
-        reply = '❌ Unsupported token. Use usdc or usdt.';
-      } else {
-        // Tip everyone else (excluding sender)
-        const recipients = Object.entries(wallets).filter(([k]) => k !== from);
-        const eachAmt = ethers.parseUnits((amt / recipients.length).toFixed(6), decimals);
-        const contract = new ethers.Contract(contractAddr, ERC20_ABI, wallet);
-        for (const [user, w] of recipients) {
-          await contract.transfer(w.address, eachAmt);
-        }
-        reply = `💸 Tipped ${amt} ${token.toUpperCase()} equally to ${recipients.length} users.`;
+      const to = users[Math.floor(Math.random() * users.length)];
+      const recipient = wallets[to].address;
+      const tokenAddress = token === 'USDC' ? USDC : token === 'USDT' ? USDT : null;
+      try {
+        const sender = wallets[from].connect(provider);
+        const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, sender);
+        const tx = await tokenContract.transfer(recipient, ethers.parseUnits(amount, 6));
+        await tx.wait();
+        reply = `🎁 You tipped ${amount} ${token} to a random user (${recipient})!`;
+      } catch (e) {
+        reply = `❌ Tip failed: ${e.message}`;
       }
     }
   } else if (incomingMsg.toLowerCase().startsWith('/rain')) {
-    const parts = incomingMsg.split(' ');
-    if (parts.length !== 3) {
-      reply = '❌ Format: /rain token amount';
-    } else if (!wallets[from]) {
-      reply = '❌ You need to /start first to create your wallet.';
+    const { token, amount } = parseSendCommand(incomingMsg);
+    const recipients = Object.keys(wallets).filter(u => u !== from);
+    if (!wallets[from]) {
+      reply = '❌ You need to /start first.';
+    } else if (recipients.length === 0) {
+      reply = '⚠ No users to rain on yet.';
     } else {
-      const token = parts[1].toLowerCase();
-      const amt = parts[2];
-      const contractAddr = token === 'usdc' ? USDC : token === 'usdt' ? USDT : null;
-      const decimals = 6;
-      const wallet = wallets[from].connect(provider);
-
-      if (!contractAddr) {
-        reply = '❌ Unsupported token. Use usdc or usdt.';
-      } else {
-        const recipients = Object.entries(wallets).filter(([k]) => k !== from);
-        const eachAmt = ethers.parseUnits((amt / recipients.length).toFixed(6), decimals);
-        const contract = new ethers.Contract(contractAddr, ERC20_ABI, wallet);
-        for (const [user, w] of recipients) {
-          await contract.transfer(w.address, eachAmt);
+      const tokenAddress = token === 'USDC' ? USDC : token === 'USDT' ? USDT : null;
+      const splitAmount = parseFloat(amount) / recipients.length;
+      try {
+        const sender = wallets[from].connect(provider);
+        const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, sender);
+        for (const u of recipients) {
+          const tx = await tokenContract.transfer(wallets[u].address, ethers.parseUnits(splitAmount.toString(), 6));
+          await tx.wait();
         }
-        reply = `🌧️ Rained ${amt} ${token.toUpperCase()} on ${recipients.length} users.`;
+        reply = `🌧 Rained ${amount} ${token} equally on ${recipients.length} users!`;
+      } catch (e) {
+        reply = `❌ Rain failed: ${e.message}`;
       }
     }
-  } else {
-    reply = '⚙️ Unknown command. Try /start, /balance, /receive, /send, /tip, /rain.';
   }
 
   await client.messages.create({
@@ -160,3 +164,4 @@ app.post('/webhook', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 BasePay bot live on port ${PORT}`);
 });
+
