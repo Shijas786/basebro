@@ -1,0 +1,25 @@
+{
+  "name": "basepay-whatsapp-bot",
+  "version": "1.0.0",
+  "description": "cooking",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shijas786/basepay-whatsapp-bot.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/shijas786/basepay-whatsapp-bot/issues"
+  },
+  "homepage": "https://github.com/shijas786/basepay-whatsapp-bot#readme",
+  "dependencies": {
+    "dotenv": "^17.0.1",
+    "express": "^5.1.0"
+  }
+}
