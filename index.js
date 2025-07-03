@@ -92,4 +92,5 @@ app.post('/webhook', async (req, res) => {
     const { token, to, amount } = parseSendCommand(incomingMsg);
     const tokenAddress = token === 'USDC' ? USDC : token === 'USDT' ? USDT : null;
     if (!tokenAddress || !ethers.isAddress(to)) {
-      reply = '❌ Format: /send USDC 0xabc... 1.
+  reply = '❌ Invalid token or address format. Example: /send USDC 0xabc123... 1.5';
+
