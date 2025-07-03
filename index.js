@@ -10,6 +10,10 @@ const PORT = process.env.PORT || 3000;
 
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
+// This is to verify the webhook is live
+app.get('/webhook', (req, res) => {
+  res.send('BasePay Bot Webhook is live!');
+});
 
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
