@@ -52,6 +52,12 @@ function parseSendCommand(text) {
 app.get('/webhook', (req, res) => {
   res.send('Webhook is active ✅');
 });
+app.post('/webhook', async (req, res) => {
+  // your bot logic...
+});app.get('/webhook', (req, res) => {
+  res.send('Webhook OK');
+});
+
 
 app.post('/webhook', async (req, res) => {
   const incomingMsg = req.body.Body.trim();
@@ -165,6 +171,10 @@ app.post('/webhook', async (req, res) => {
 });
 
 // Start server
+app.get('/webhook', (req, res) => {
+  res.send('✅ Webhook up and running!');
+});
+
 app.listen(PORT, () => {
   console.log(`🚀 BasePay bot live on port ${PORT}`);
 });
