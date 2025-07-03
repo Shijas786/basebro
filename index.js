@@ -1,36 +1,27 @@
-require('dotenv').config();
-const express = require('express');
-const bodyParser = require('body-parser');
-const twilio = require('twilio');
-
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.use(bodyParser.urlencoded({ extended: false }));
-app.use(bodyParser.json());
-
-const accountSid = process.env.TWILIO_ACCOUNT_SID;
-const authToken = process.env.TWILIO_AUTH_TOKEN;
-const fromNumber = process.env.TWILIO_WHATSAPP_NUMBER;
-
-const client = twilio(accountSid, authToken);
-
-// Simple webhook to respond to WhatsApp messages
 app.post('/webhook', async (req, res) => {
-  const incomingMsg = req.body.Body;
+  const incomingMsg = req.body.Body?.trim().toLowerCase();
   const from = req.body.From;
 
-  console.log(`Received: "${incomingMsg}" from ${from}`);
+  console.log(`📩 Incoming: "${incomingMsg}" from ${from}`);
 
-  let reply = 'Welcome to BasePay Bot!';
+  let reply = '';
 
-  if (incomingMsg.toLowerCase() === '/start') {
+  if (incomingMsg === '/start') {
     reply = '👋 Hello! Your wallet is being set up.';
-  } else if (incomingMsg.toLowerCase() === '/help') {
-    reply = 'Use /balance, /send, /tip to manage your wallet.';
+  } else if (incomingMsg === '/help') {
+    reply = '📖 Use:\n/start - Setup Wallet\n/balance - View Balance\n/send - Send Tokens\n/tip - Tip in Groups\n/rain - Rain tokens randomly';
+  } else if (incomingMsg === '/balance') {
+    reply = '🪙 Your balance:\nUSDT: 0.00\nUSDC: 0.00';
+  } else if (incomingMsg === '/send') {
+    reply = '📤 Usage:\n/send <amount> <token> to <phone>\nExample: /send 5 usdt to +918123456789';
+  } else if (incomingMsg === '/tip') {
+    reply = '💸 Usage:\n/tip <amount> <token>\nExample: /tip 2 usdc';
+  } else if (incomingMsg === '/rain') {
+    reply = '🌧️ Usage:\n/rain <amount> <token> to <number>\nExample: /rain 10 usdt to 3 users';
+  } else {
+    reply = '👋 Welcome to BasePay Bot!\nSend /help to see available commands.';
   }
 
-  // Send back a WhatsApp reply
   await client.messages.create({
     body: reply,
     from: fromNumber,
@@ -40,7 +31,3 @@ app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`Bot running on port ${PORT}`);
-});
