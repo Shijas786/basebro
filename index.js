@@ -14,76 +14,137 @@ app.use(bodyParser.json());
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
 const fromNumber = process.env.TWILIO_WHATSAPP_NUMBER;
+const provider = new ethers.JsonRpcProvider('https://mainnet.base.org');
 
 const client = twilio(accountSid, authToken);
 
-// Dummy in-memory DB (replace with real DB)
-const userWallets = {};
-const userHistory = {};
+// ERC20 token contract addresses
+const USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+const USDT = '0xfde4c96c8593536e31f229ea8f37b2ada2699bb2';
+const ERC20_ABI = [
+  "function balanceOf(address) view returns (uint256)",
+  "function transfer(address,uint256) returns (bool)"
+];
 
-const USDC_ADDRESS = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
-const USDT_ADDRESS = '0xfde4c96c8593536e31f229ea8f37b2ada2699bb2';
+const wallets = {}; // In-memory user wallets for demo purposes
 
-const provider = new ethers.JsonRpcProvider('https://mainnet.base.org');
-
-async function getBalances(address) {
-  const ethBalance = await provider.getBalance(address);
-  const usdc = new ethers.Contract(USDC_ADDRESS, ["function balanceOf(address) view returns (uint256)"], provider);
-  const usdt = new ethers.Contract(USDT_ADDRESS, ["function balanceOf(address) view returns (uint256)"], provider);
-  const usdcBal = await usdc.balanceOf(address);
-  const usdtBal = await usdt.balanceOf(address);
-
-  return {
-    eth: ethers.formatEther(ethBalance),
-    usdc: ethers.formatUnits(usdcBal, 6),
-    usdt: ethers.formatUnits(usdtBal, 6),
-  };
+async function getBalance(tokenAddress, userAddress, decimals = 6) {
+  const token = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
+  const bal = await token.balanceOf(userAddress);
+  return ethers.formatUnits(bal, decimals);
 }
 
-function logCommand(user, cmd) {
-  if (!userHistory[user]) userHistory[user] = [];
-  userHistory[user].unshift(cmd);
-  if (userHistory[user].length > 5) userHistory[user].pop();
-}
-
-function getUserWallet(user) {
-  if (!userWallets[user]) {
-    userWallets[user] = ethers.Wallet.createRandom().address;
-  }
-  return userWallets[user];
-}
-
+// Webhook for WhatsApp messages
 app.post('/webhook', async (req, res) => {
   const incomingMsg = req.body.Body.trim();
   const from = req.body.From;
-  const lower = incomingMsg.toLowerCase();
 
   console.log(`Received: "${incomingMsg}" from ${from}`);
+  let reply = '🤖 Welcome to BasePay Bot!';
 
-  let reply = 'Welcome to BasePay Bot!';
+  if (incomingMsg.toLowerCase() === '/start') {
+    if (!wallets[from]) {
+      const newWallet = ethers.Wallet.createRandom();
+      wallets[from] = newWallet;
+      reply = `🎉 Wallet created!\nAddress: ${newWallet.address}`;
+    } else {
+      reply = '✅ Wallet already exists.';
+    }
+  } else if (incomingMsg.toLowerCase() === '/balance') {
+    if (!wallets[from]) {
+      reply = '❌ You need to /start first to create your wallet.';
+    } else {
+      const address = wallets[from].address;
+      const [eth, usdc, usdt] = await Promise.all([
+        provider.getBalance(address).then(b => ethers.formatEther(b)),
+        getBalance(USDC, address, 6),
+        getBalance(USDT, address, 6)
+      ]);
+      reply = `💼 Balance for ${address}\nETH: ${eth}\nUSDC: ${usdc}\nUSDT: ${usdt}`;
+    }
+  } else if (incomingMsg.toLowerCase().startsWith('/receive')) {
+    if (!wallets[from]) {
+      reply = '❌ You need to /start first to create your wallet.';
+    } else {
+      const addr = wallets[from].address;
+      const qr = await QRCode.toDataURL(addr);
+      reply = `📥 Your address: ${addr}\n(Send tokens to this address)`;
+    }
+  } else if (incomingMsg.toLowerCase().startsWith('/send')) {
+    const parts = incomingMsg.split(' ');
+    if (parts.length !== 4) {
+      reply = '❌ Format: /send token address amount';
+    } else if (!wallets[from]) {
+      reply = '❌ You need to /start first to create your wallet.';
+    } else {
+      const token = parts[1].toLowerCase();
+      const to = parts[2];
+      const amt = parts[3];
+      const wallet = wallets[from].connect(provider);
+      const contractAddr = token === 'usdc' ? USDC : token === 'usdt' ? USDT : null;
+      const decimals = 6;
 
-  if (lower === '/start') {
-    const wallet = getUserWallet(from);
-    reply = `👋 Welcome to BasePay Bot\n\nSend, receive, tip, and trade crypto directly on WhatsApp — simple, secure, gasless, and peer-to-peer, *built on Base*.\n\n⚙️ One-time setup:\nSend *join draw-worker* to *+1 415 523 8886* on WhatsApp to activate your wallet.\n(This is required every 72 hours.)\n\nType /help to view available commands.`;
-    logCommand(from, '/start');
-  } else if (lower === '/help') {
-    reply = '📚 Available commands:\n/start\n/help\n/balance\n/history\n/receive';
-    logCommand(from, '/help');
-  } else if (lower === '/balance') {
-    const wallet = getUserWallet(from);
-    const balances = await getBalances(wallet);
-    reply = `💰 Your Wallet Balance:\nETH: ${balances.eth}\nUSDC: ${balances.usdc}\nUSDT: ${balances.usdt}`;
-    logCommand(from, '/balance');
-  } else if (lower === '/history') {
-    const hist = userHistory[from] || [];
-    reply = `🕓 Your recent actions:\n` + hist.join('\n');
-    logCommand(from, '/history');
-  } else if (lower === '/receive') {
-    const wallet = getUserWallet(from);
-    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${wallet}`;
-    await client.messages.create({ from: fromNumber, to: from, body: `🔐 Your wallet address:\n${wallet}` });
-    await client.messages.create({ from: fromNumber, to: from, mediaUrl: [qrUrl], body: `📲 Scan this QR to receive tokens.` });
-    return res.sendStatus(200);
+      if (!contractAddr) {
+        reply = '❌ Unsupported token. Use usdc or usdt.';
+      } else {
+        const contract = new ethers.Contract(contractAddr, ERC20_ABI, wallet);
+        const tx = await contract.transfer(to, ethers.parseUnits(amt, decimals));
+        reply = `✅ Sent ${amt} ${token.toUpperCase()} to ${to}\nTx: ${tx.hash}`;
+      }
+    }
+  } else if (incomingMsg.toLowerCase().startsWith('/tip')) {
+    const parts = incomingMsg.split(' ');
+    if (parts.length !== 3) {
+      reply = '❌ Format: /tip token amount';
+    } else if (!wallets[from]) {
+      reply = '❌ You need to /start first to create your wallet.';
+    } else {
+      const token = parts[1].toLowerCase();
+      const amt = parts[2];
+      const contractAddr = token === 'usdc' ? USDC : token === 'usdt' ? USDT : null;
+      const decimals = 6;
+      const wallet = wallets[from].connect(provider);
+
+      if (!contractAddr) {
+        reply = '❌ Unsupported token. Use usdc or usdt.';
+      } else {
+        // Tip everyone else (excluding sender)
+        const recipients = Object.entries(wallets).filter(([k]) => k !== from);
+        const eachAmt = ethers.parseUnits((amt / recipients.length).toFixed(6), decimals);
+        const contract = new ethers.Contract(contractAddr, ERC20_ABI, wallet);
+        for (const [user, w] of recipients) {
+          await contract.transfer(w.address, eachAmt);
+        }
+        reply = `💸 Tipped ${amt} ${token.toUpperCase()} equally to ${recipients.length} users.`;
+      }
+    }
+  } else if (incomingMsg.toLowerCase().startsWith('/rain')) {
+    const parts = incomingMsg.split(' ');
+    if (parts.length !== 3) {
+      reply = '❌ Format: /rain token amount';
+    } else if (!wallets[from]) {
+      reply = '❌ You need to /start first to create your wallet.';
+    } else {
+      const token = parts[1].toLowerCase();
+      const amt = parts[2];
+      const contractAddr = token === 'usdc' ? USDC : token === 'usdt' ? USDT : null;
+      const decimals = 6;
+      const wallet = wallets[from].connect(provider);
+
+      if (!contractAddr) {
+        reply = '❌ Unsupported token. Use usdc or usdt.';
+      } else {
+        const recipients = Object.entries(wallets).filter(([k]) => k !== from);
+        const eachAmt = ethers.parseUnits((amt / recipients.length).toFixed(6), decimals);
+        const contract = new ethers.Contract(contractAddr, ERC20_ABI, wallet);
+        for (const [user, w] of recipients) {
+          await contract.transfer(w.address, eachAmt);
+        }
+        reply = `🌧️ Rained ${amt} ${token.toUpperCase()} on ${recipients.length} users.`;
+      }
+    }
+  } else {
+    reply = '⚙️ Unknown command. Try /start, /balance, /receive, /send, /tip, /rain.';
   }
 
   await client.messages.create({
@@ -95,6 +156,7 @@ app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
 });
 
+// Start server
 app.listen(PORT, () => {
-  console.log(`Bot running on port ${PORT}`);
+  console.log(`🚀 BasePay bot live on port ${PORT}`);
 });
