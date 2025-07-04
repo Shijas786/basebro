@@ -1,5 +1,5 @@
 // index.js (BasePay Bot)
-// Full Setup: Smart Wallet + P2P Escrow + AI-style Commands + Token Balance + Tutorial + Full Escrow Logic + Rain + Tip + Group Tracking + Real Smart AA Wallets
+// Full Setup: Smart Wallet + P2P Escrow + AI-style Commands + Token Balance + Tutorial + Full Escrow Logic + Rain + Tip + Group Tracking + Real Smart AA Wallets + Group Rain
 
 require('dotenv').config();
 const express = require('express');
@@ -15,10 +15,16 @@ const wallets = {};
 const ads = [];
 const escrow = {};
 const history = {};
+const p2pHistory = {};
 const contactNames = {};
 const groupMembers = {};
+const greetedUsers = new Set();
 
-const ERC20_ABI = ["function transfer(address to, uint amount) returns (bool)", "function balanceOf(address) view returns (uint256)"];
+const ERC20_ABI = [
+  "function transfer(address to, uint amount) returns (bool)",
+  "function balanceOf(address) view returns (uint256)",
+  "function decimals() view returns (uint8)"
+];
 
 function getWallet(privateKey) {
   return new ethers.Wallet(privateKey, provider);
@@ -46,12 +52,41 @@ function recordTx(user, type, token, amount, to) {
   if (history[user].length > 5) history[user] = history[user].slice(0, 5);
 }
 
+function recordP2PTx(user, orderId, role, action, token, amount, peer) {
+  if (!p2pHistory[user]) p2pHistory[user] = [];
+  p2pHistory[user].unshift({ orderId, role, action, token, amount, peer, time: new Date().toISOString() });
+  if (p2pHistory[user].length > 5) p2pHistory[user] = p2pHistory[user].slice(0, 5);
+}
+
 function trackGroupMember(groupId, userId) {
   if (!groupId || !userId) return;
   if (!groupMembers[groupId]) groupMembers[groupId] = [];
   if (!groupMembers[groupId].includes(userId)) {
     groupMembers[groupId].push(userId);
   }
+}
+
+async function getTokenBalance(address, tokenAddress) {
+  const contract = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
+  const raw = await contract.balanceOf(address);
+  return ethers.formatUnits(raw, 6);
+}
+
+function parseAICommand(msg) {
+  msg = msg.toLowerCase();
+  if (msg.startsWith('send') && msg.includes('to')) {
+    const [, amount, token,, name] = msg.split(' ');
+    return { type: 'send', amount, token: token.toUpperCase(), name };
+  }
+  if (msg.startsWith('tip') && msg.includes('to')) {
+    const [, amount, token,, name] = msg.split(' ');
+    return { type: 'tip', amount, token: token.toUpperCase(), name };
+  }
+  if (msg.startsWith('rain')) {
+    const [, amount, token] = msg.split(' ');
+    return { type: 'rain', amount, token: token.toUpperCase() };
+  }
+  return null;
 }
 
 app.post('/gupshup', async (req, res) => {
@@ -61,85 +96,53 @@ app.post('/gupshup', async (req, res) => {
   const groupId = req.body.group?.id || null;
   let reply = "";
 
-  if (!wallets[from]) await createSmartAAWallet(from);
+  if (!wallets[from]) {
+    await createSmartAAWallet(from);
+    if (!greetedUsers.has(from)) {
+      greetedUsers.add(from);
+      reply += `👋 Welcome to *BasePay*!\n🪙 You now have a smart wallet: *${wallets[from].address}*\nType /start to explore features like send, swap, rain, P2P and more.\n`;
+    }
+  }
+
   if (isGroup && groupId) trackGroupMember(groupId, from);
 
-  if (/^\/mywallet$/.test(incomingMsg)) {
-    return res.send({ reply: `🧾 Your smart wallet address is:\n\`${wallets[from].address}\`` });
+  if (incomingMsg === "/start") {
+    reply = `🚀 *Welcome to BasePay* \n\nBasePay is your all-in-one WhatsApp crypto wallet powered by Account Abstraction on Base chain.\n\nHere's what you can do:\n• 💸 Send/Receive USDT, USDC easily\n• 🎯 Tip & Rain to friends and groups\n• 🧾 View wallet balances & history\n• 🛒 P2P Ads, Buy, Sell, Escrow with UPI\n• 🧠 Chat naturally: "send 5 usdt to amal"\n\nTry commands like:\n• /balance\n• /history\n• /p2phistory\n• /tip 1 usdt to +9181xxxxx\n• /post to sell\n• /buy to order\n\nEnjoy your Web3 experience inside WhatsApp 🔥`;
+    return res.send({ reply });
   }
 
-  if (/^\/balance$/.test(incomingMsg)) {
-    const usdcAddress = process.env.USDC;
-    const usdtAddress = process.env.USDT;
-    const userAddress = wallets[from].address;
+  const aiParsed = parseAICommand(incomingMsg);
 
-    const usdc = new ethers.Contract(usdcAddress, ERC20_ABI, provider);
-    const usdt = new ethers.Contract(usdtAddress, ERC20_ABI, provider);
-
-    try {
-      const usdcBal = await usdc.balanceOf(userAddress);
-      const usdtBal = await usdt.balanceOf(userAddress);
-      return res.send({
-        reply: `💰 Your balances:\nUSDC: ${ethers.formatUnits(usdcBal, 6)}\nUSDT: ${ethers.formatUnits(usdtBal, 6)}`
-      });
-    } catch (err) {
-      return res.send({ reply: `❌ Failed to fetch balance: ${err.message}` });
-    }
-  }
-
-  if (/^\/history$/.test(incomingMsg)) {
-    const txs = history[from] || [];
-    if (!txs.length) {
-      return res.send({ reply: '📭 No transactions yet.' });
-    } else {
-      const txList = txs.map(tx => `• ${tx.type.toUpperCase()} ${tx.amount} ${tx.token} → ${tx.to}`).join('\n');
-      return res.send({ reply: `📜 *Last 5 transactions:*\n${txList}` });
-    }
-  }
-
-  if (/tip\s+\d+(\.\d+)?\s+(usdt|usdc)\s+to\s+@\d+/.test(incomingMsg)) {
-    const parts = incomingMsg.split(/\s+/);
-    const amount = parts[1];
-    const token = parts[2].toUpperCase();
-    const toNumber = parts[4].replace('@', '');
-    const senderWallet = getWallet(process.env.WALLET_PRIVATE_KEY);
-    const tokenAddress = token === 'USDT' ? process.env.USDT : process.env.USDC;
-    try {
-      if (!wallets[toNumber]) await createSmartAAWallet(toNumber);
-      const contract = new ethers.Contract(tokenAddress, ERC20_ABI, senderWallet);
-      const tx = await contract.transfer(wallets[toNumber].address, ethers.parseUnits(amount, 6));
-      await tx.wait();
-      recordTx(from, 'tip', token, amount, toNumber);
-      return res.send({ reply: `💸 Tipped ${amount} ${token} to @${toNumber}` });
-    } catch (err) {
-      return res.send({ reply: `❌ Tip failed: ${err.message}` });
-    }
-  }
-
-  if (incomingMsg.startsWith("/rain")) {
-    const parts = incomingMsg.split(" ");
-    const amount = parts[1];
-    const token = parts[2]?.toUpperCase();
-    if (!isGroup || !groupId) return res.send({ reply: "⚠️ Rain can only be used in groups." });
+  if (aiParsed?.type === 'rain' && isGroup && groupId) {
+    const { amount, token } = aiParsed;
     const recipients = groupMembers[groupId]?.filter(u => u !== from) || [];
-    if (!recipients.length) return res.send({ reply: "❌ No other users in this group yet." });
-    const share = parseFloat(amount) / recipients.length;
-    const senderWallet = getWallet(process.env.WALLET_PRIVATE_KEY);
+    if (!recipients.length) return res.send({ reply: '🙁 No members to rain on.' });
+    const each = parseFloat(amount) / recipients.length;
     const tokenAddress = token === 'USDT' ? process.env.USDT : process.env.USDC;
     try {
-      const contract = new ethers.Contract(tokenAddress, ERC20_ABI, senderWallet);
-      for (let user of recipients) {
+      const sender = wallets[from].smartAccount;
+      const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
+      for (const user of recipients) {
         if (!wallets[user]) await createSmartAAWallet(user);
-        await contract.transfer(wallets[user].address, ethers.parseUnits(share.toFixed(6), 6));
-        recordTx(from, 'rain', token, share.toFixed(6), user);
+        const tx = await sender.sendTransaction({
+          to: wallets[user].address,
+          data: tokenContract.interface.encodeFunctionData('transfer', [wallets[user].address, ethers.parseUnits(each.toFixed(6), 6)])
+        });
+        await tx.wait();
       }
-      return res.send({ reply: `🌧️ Rained ${amount} ${token} on ${recipients.length} users.` });
+      recordTx(from, 'rain', token, amount, `${recipients.length} users`);
+      reply = `🌧️ Rained ${amount} ${token} on ${recipients.length} group members.`;
     } catch (err) {
-      return res.send({ reply: `❌ Rain failed: ${err.message}` });
+      reply = `❌ Rain failed: ${err.message}`;
     }
+    return res.send({ reply });
   }
 
-  return res.send({ reply: "🤖 Command not recognized. Type /help to begin." });
+  return res.send({ reply: reply || "🤖 Command not recognized. Try /start /balance /history /p2phistory /tip /rain /post /buy /cancel /release." });
+});
+// Health check route for Gupshup webhook validation
+app.get('/gupshup', (req, res) => {
+  res.status(200).send('✅ BasePay Webhook Ready');
 });
 
 app.listen(PORT, () => console.log(`BasePay bot running on port ${PORT}`));
