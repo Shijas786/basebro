@@ -19,6 +19,9 @@
   },
   "homepage": "https://github.com/shijas786/basepay-whatsapp-bot#readme",
   "dependencies": {
+    "@biconomy/account": "^4.5.7",
+    "@biconomy/core-types": "^3.1.4",
+    "axios": "^1.10.0",
     "dotenv": "^17.0.1",
     "ethers": "^6.15.0",
     "express": "^5.1.0",

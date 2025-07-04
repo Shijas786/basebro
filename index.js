@@ -1,167 +1,145 @@
+// index.js (BasePay Bot)
+// Full Setup: Smart Wallet + P2P Escrow + AI-style Commands + Token Balance + Tutorial + Full Escrow Logic + Rain + Tip + Group Tracking + Real Smart AA Wallets
+
 require('dotenv').config();
 const express = require('express');
 const bodyParser = require('body-parser');
-const twilio = require('twilio');
 const { ethers } = require('ethers');
-
+const { BiconomySmartAccount, BiconomySmartAccountConfig, Bundler } = require('@biconomy/account');
 const app = express();
+app.use(bodyParser.json());
 const PORT = process.env.PORT || 3000;
 
-app.use(bodyParser.urlencoded({ extended: false }));
-app.use(bodyParser.json());
+const provider = new ethers.JsonRpcProvider(process.env.BASE_RPC);
+const wallets = {};
+const ads = [];
+const escrow = {};
+const history = {};
+const contactNames = {};
+const groupMembers = {};
 
-const accountSid = process.env.TWILIO_ACCOUNT_SID;
-const authToken = process.env.TWILIO_AUTH_TOKEN;
-const fromNumber = process.env.TWILIO_WHATSAPP_NUMBER;
-const provider = new ethers.JsonRpcProvider('https://mainnet.base.org');
+const ERC20_ABI = ["function transfer(address to, uint amount) returns (bool)", "function balanceOf(address) view returns (uint256)"];
 
-const client = twilio(accountSid, authToken);
+function getWallet(privateKey) {
+  return new ethers.Wallet(privateKey, provider);
+}
 
-const USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
-const USDT = '0xfde4c96c8593536e31f229ea8f37b2ada2699bb2';
-const ERC20_ABI = [
-  "function balanceOf(address) view returns (uint256)",
-  "function transfer(address,uint256) returns (bool)"
-];
-
-const wallets = {}; // In-memory wallets
-
-app.get('/webhook', (req, res) => {
-  res.status(200).send('✅ Webhook up and running!');
-});
-
-function parseSendCommand(text) {
-  const parts = text.trim().split(' ');
-  return {
-    command: parts[0].toLowerCase(),
-    token: parts[1]?.toUpperCase(),
-    to: parts[2],
-    amount: parts[3]
+async function createSmartAAWallet(userId) {
+  const signer = new ethers.Wallet(process.env.RELAYER_PRIVATE_KEY, provider);
+  const bundler = new Bundler({ bundlerUrl: process.env.BICONOMY_BUNDLER, chainId: 8453, entryPointAddress: process.env.ENTRYPOINT });
+  const config = {
+    signer,
+    chainId: 8453,
+    bundler,
+    entryPointAddress: process.env.ENTRYPOINT,
+    factoryAddress: process.env.BICONOMY_FACTORY
   };
+  const smartAccount = await BiconomySmartAccount.create(config);
+  const address = await smartAccount.getAccountAddress();
+  wallets[userId] = { address, smartAccount };
+  return address;
 }
 
-async function getBalance(tokenAddress, userAddress, decimals = 6) {
-  const token = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
-  const bal = await token.balanceOf(userAddress);
-  return ethers.formatUnits(bal, decimals);
+function recordTx(user, type, token, amount, to) {
+  if (!history[user]) history[user] = [];
+  history[user].unshift({ type, token, amount, to, time: new Date().toISOString() });
+  if (history[user].length > 5) history[user] = history[user].slice(0, 5);
 }
 
-app.post('/webhook', async (req, res) => {
-  const incomingMsg = req.body.Body?.trim();
-  const from = req.body.From;
+function trackGroupMember(groupId, userId) {
+  if (!groupId || !userId) return;
+  if (!groupMembers[groupId]) groupMembers[groupId] = [];
+  if (!groupMembers[groupId].includes(userId)) {
+    groupMembers[groupId].push(userId);
+  }
+}
 
-  console.log(`Received: "${incomingMsg}" from ${from}`);
-  let reply = '🤖 Welcome to BasePay Bot! Built on Base.';
+app.post('/gupshup', async (req, res) => {
+  const incomingMsg = req.body.message?.text?.toLowerCase() || "";
+  const from = req.body.sender.phone;
+  const isGroup = !!req.body.group?.id;
+  const groupId = req.body.group?.id || null;
+  let reply = "";
 
-  if (!incomingMsg) return res.sendStatus(400);
+  if (!wallets[from]) await createSmartAAWallet(from);
+  if (isGroup && groupId) trackGroupMember(groupId, from);
 
-  if (incomingMsg.toLowerCase() === '/start') {
-    if (!wallets[from]) {
-      const newWallet = ethers.Wallet.createRandom();
-      wallets[from] = newWallet;
-      reply = `👋 Wallet created!\nAddress: ${newWallet.address}`;
-    } else {
-      reply = '✅ Wallet already exists. Use /help to see available commands.';
-    }
-  } else if (incomingMsg.toLowerCase() === '/help') {
-    reply = `📖 *BasePay Help Menu*\n/start – Create wallet\n/balance – Check balances\n/receive – Show address\n/send TOKEN ADDRESS AMOUNT\n/tip TOKEN AMOUNT\n/rain TOKEN AMOUNT`;
-  } else if (incomingMsg.toLowerCase() === '/balance') {
-    if (!wallets[from]) {
-      reply = '❌ You need to /start first.';
-    } else {
-      const addr = wallets[from].address;
-      const [eth, usdc, usdt] = await Promise.all([
-        provider.getBalance(addr).then(b => ethers.formatEther(b)),
-        getBalance(USDC, addr),
-        getBalance(USDT, addr)
-      ]);
-      reply = `💼 ${addr}\nETH: ${eth}\nUSDC: ${usdc}\nUSDT: ${usdt}`;
-    }
-  } else if (incomingMsg.toLowerCase() === '/receive') {
-    if (!wallets[from]) {
-      reply = '❌ Use /start first.';
-    } else {
-      reply = `📥 Address: ${wallets[from].address}`;
-    }
-  } else if (incomingMsg.toLowerCase().startsWith('/send')) {
-    if (!wallets[from]) {
-      reply = '❌ Use /start first.';
-    } else {
-      const { token, to, amount } = parseSendCommand(incomingMsg);
-      const tokenAddress = token === 'USDC' ? USDC : token === 'USDT' ? USDT : null;
-      if (!tokenAddress || !ethers.isAddress(to)) {
-        reply = '❌ Invalid token or address format. Example: /send USDC 0xabc... 1.5';
-      } else {
-        try {
-          const sender = wallets[from].connect(provider);
-          const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, sender);
-          const tx = await tokenContract.transfer(to, ethers.parseUnits(amount, 6));
-          await tx.wait();
-          reply = `✅ Sent ${amount} ${token} to ${to}`;
-        } catch (err) {
-          reply = `❌ Send failed: ${err.message}`;
-        }
-      }
-    }
-  } else if (incomingMsg.toLowerCase().startsWith('/tip')) {
-    if (!wallets[from]) {
-      reply = '❌ You need to /start first.';
-    } else {
-      const { token, amount } = parseSendCommand(incomingMsg);
-      const users = Object.keys(wallets).filter(u => u !== from);
-      if (users.length === 0) {
-        reply = '⚠ No one to tip yet.';
-      } else {
-        const to = users[Math.floor(Math.random() * users.length)];
-        const recipient = wallets[to].address;
-        const tokenAddress = token === 'USDC' ? USDC : token === 'USDT' ? USDT : null;
-        try {
-          const sender = wallets[from].connect(provider);
-          const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, sender);
-          const tx = await tokenContract.transfer(recipient, ethers.parseUnits(amount, 6));
-          await tx.wait();
-          reply = `🎁 You tipped ${amount} ${token} to a random user (${recipient})!`;
-        } catch (err) {
-          reply = `❌ Tip failed: ${err.message}`;
-        }
-      }
-    }
-  } else if (incomingMsg.toLowerCase().startsWith('/rain')) {
-    if (!wallets[from]) {
-      reply = '❌ You need to /start first.';
-    } else {
-      const { token, amount } = parseSendCommand(incomingMsg);
-      const recipients = Object.keys(wallets).filter(u => u !== from);
-      if (recipients.length === 0) {
-        reply = '⚠ No users to rain on yet.';
-      } else {
-        const tokenAddress = token === 'USDC' ? USDC : token === 'USDT' ? USDT : null;
-        const splitAmount = parseFloat(amount) / recipients.length;
-        try {
-          const sender = wallets[from].connect(provider);
-          const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, sender);
-          for (const u of recipients) {
-            const tx = await tokenContract.transfer(wallets[u].address, ethers.parseUnits(splitAmount.toString(), 6));
-            await tx.wait();
-          }
-          reply = `🌧 Rained ${amount} ${token} equally on ${recipients.length} users!`;
-        } catch (err) {
-          reply = `❌ Rain failed: ${err.message}`;
-        }
-      }
+  if (/^\/mywallet$/.test(incomingMsg)) {
+    return res.send({ reply: `🧾 Your smart wallet address is:\n\`${wallets[from].address}\`` });
+  }
+
+  if (/^\/balance$/.test(incomingMsg)) {
+    const usdcAddress = process.env.USDC;
+    const usdtAddress = process.env.USDT;
+    const userAddress = wallets[from].address;
+
+    const usdc = new ethers.Contract(usdcAddress, ERC20_ABI, provider);
+    const usdt = new ethers.Contract(usdtAddress, ERC20_ABI, provider);
+
+    try {
+      const usdcBal = await usdc.balanceOf(userAddress);
+      const usdtBal = await usdt.balanceOf(userAddress);
+      return res.send({
+        reply: `💰 Your balances:\nUSDC: ${ethers.formatUnits(usdcBal, 6)}\nUSDT: ${ethers.formatUnits(usdtBal, 6)}`
+      });
+    } catch (err) {
+      return res.send({ reply: `❌ Failed to fetch balance: ${err.message}` });
     }
   }
 
-  // Send reply
-  await client.messages.create({
-    body: reply,
-    from: fromNumber,
-    to: from
-  });
+  if (/^\/history$/.test(incomingMsg)) {
+    const txs = history[from] || [];
+    if (!txs.length) {
+      return res.send({ reply: '📭 No transactions yet.' });
+    } else {
+      const txList = txs.map(tx => `• ${tx.type.toUpperCase()} ${tx.amount} ${tx.token} → ${tx.to}`).join('\n');
+      return res.send({ reply: `📜 *Last 5 transactions:*\n${txList}` });
+    }
+  }
 
-  res.sendStatus(200);
+  if (/tip\s+\d+(\.\d+)?\s+(usdt|usdc)\s+to\s+@\d+/.test(incomingMsg)) {
+    const parts = incomingMsg.split(/\s+/);
+    const amount = parts[1];
+    const token = parts[2].toUpperCase();
+    const toNumber = parts[4].replace('@', '');
+    const senderWallet = getWallet(process.env.WALLET_PRIVATE_KEY);
+    const tokenAddress = token === 'USDT' ? process.env.USDT : process.env.USDC;
+    try {
+      if (!wallets[toNumber]) await createSmartAAWallet(toNumber);
+      const contract = new ethers.Contract(tokenAddress, ERC20_ABI, senderWallet);
+      const tx = await contract.transfer(wallets[toNumber].address, ethers.parseUnits(amount, 6));
+      await tx.wait();
+      recordTx(from, 'tip', token, amount, toNumber);
+      return res.send({ reply: `💸 Tipped ${amount} ${token} to @${toNumber}` });
+    } catch (err) {
+      return res.send({ reply: `❌ Tip failed: ${err.message}` });
+    }
+  }
+
+  if (incomingMsg.startsWith("/rain")) {
+    const parts = incomingMsg.split(" ");
+    const amount = parts[1];
+    const token = parts[2]?.toUpperCase();
+    if (!isGroup || !groupId) return res.send({ reply: "⚠️ Rain can only be used in groups." });
+    const recipients = groupMembers[groupId]?.filter(u => u !== from) || [];
+    if (!recipients.length) return res.send({ reply: "❌ No other users in this group yet." });
+    const share = parseFloat(amount) / recipients.length;
+    const senderWallet = getWallet(process.env.WALLET_PRIVATE_KEY);
+    const tokenAddress = token === 'USDT' ? process.env.USDT : process.env.USDC;
+    try {
+      const contract = new ethers.Contract(tokenAddress, ERC20_ABI, senderWallet);
+      for (let user of recipients) {
+        if (!wallets[user]) await createSmartAAWallet(user);
+        await contract.transfer(wallets[user].address, ethers.parseUnits(share.toFixed(6), 6));
+        recordTx(from, 'rain', token, share.toFixed(6), user);
+      }
+      return res.send({ reply: `🌧️ Rained ${amount} ${token} on ${recipients.length} users.` });
+    } catch (err) {
+      return res.send({ reply: `❌ Rain failed: ${err.message}` });
+    }
+  }
+
+  return res.send({ reply: "🤖 Command not recognized. Type /help to begin." });
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 BasePay bot live on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`BasePay bot running on port ${PORT}`));
