@@ -74,3 +74,6 @@ async function getTokenBalance(address, tokenAddress) {
 }
 
 app.listen(PORT, () => console.log(`🚀 BasePay Gupshup bot on port ${PORT}`));
+app.get('/', (req, res) => {
+  res.status(200).send('✅ BasePay server running. Use /gupshup for webhook.');
+});
