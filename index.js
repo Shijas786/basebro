@@ -21,3 +21,6 @@ app.get('/gupshup', (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Minimal Gupshup bot live on port ${PORT}`);
 });
+app.get('/', (req, res) => {
+  res.send('✅ BasePay Gupshup Bot is running!');
+});
