@@ -92,3 +92,6 @@ app.get('/gupshup', (req, res) => {
 });
 
 app.listen(PORT, () => console.log(`🚀 BasePay Gupshup bot running on port ${PORT}`));
+app.get('/', (req, res) => {
+  res.send('✅ BasePay Bot is running.');
+});
