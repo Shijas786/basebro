@@ -1,13 +1,10 @@
-require('dotenv').config();
 const express = require('express');
 const bodyParser = require('body-parser');
 const { ethers } = require('ethers');
 
 const app = express();
+app.use(bodyParser.urlencoded({ extended: false }));
 const PORT = process.env.PORT || 3000;
-
-// Middleware
-app.use(bodyParser.json());
 
 // Blockchain Setup
 const provider = new ethers.JsonRpcProvider(process.env.BASE_RPC);
@@ -15,58 +12,39 @@ const wallets = {};
 const greetedUsers = new Set();
 
 const ERC20_ABI = [
-  "function transfer(address to, uint amount) returns (bool)",
-  "function balanceOf(address) view returns (uint256)",
-  "function decimals() view returns (uint8)"
+  "function balanceOf(address owner) view returns (uint256)"
 ];
 
 const USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const USDT = '0xfde4c96c8593536e31f229ea8f37b2ada2699bb2';
 
-
-// ✅ Health Check (Render or browser)
+// ✅ Health Check
 app.get('/', (req, res) => {
-  res.status(200).send('✅ BasePay server running. Use /gupshup for webhook.');
+  res.status(200).send('✅ BasePay server running. Use POST /twilio for webhook.');
 });
 
-// ✅ Gupshup-specific test GET
-app.get('/gupshup', (req, res) => {
-  res.status(200).send('✅ Gupshup webhook live');
-});
+// ✅ Twilio Webhook (POST)
+app.post('/twilio', async (req, res) => {
+  const from = req.body.From?.replace('whatsapp:', '').trim();
+  const incomingMsg = req.body.Body?.trim().toLowerCase();
 
-// ✅ Main WhatsApp Webhook (Gupshup POST)
-app.post('/gupshup', async (req, res) => {
-  const payload = req.body;
-  const from = payload.sender?.phone;
-  const incomingMsg = payload.message?.text?.trim().toLowerCase();
-
-  console.log('📩 Incoming:', payload);
-
-  // Accept sandbox-start (required)
-  if (payload.type === "sandbox-start") {
-    return res.sendStatus(200);
-  }
+  console.log('📩 Incoming:', from, incomingMsg);
 
   if (!from || !incomingMsg) {
-    console.log('⚠️ Empty message or missing sender');
-    return res.sendStatus(200);
+    console.log('⚠️ Empty or malformed message');
+    return res.send('<Response></Response>');
+  }
+
+  // Create wallet if not exists
+  if (!wallets[from]) {
+    const wallet = ethers.Wallet.createRandom();
+    wallets[from] = wallet;
   }
 
   let reply = '🤖 Welcome to BasePay!';
 
-  // Auto-wallet creation
-  if (!wallets[from]) {
-    const wallet = ethers.Wallet.createRandom();
-    wallets[from] = wallet;
-    if (!greetedUsers.has(from)) {
-      greetedUsers.add(from);
-      reply = `👋 Hello! Wallet created: ${wallet.address}\nType /start to explore.`;
-    }
-  }
-
-  // Command handling
   if (incomingMsg === '/start') {
-    reply = `🚀 *Welcome to BasePay*\n\nCommands:\n/start\n/balance\n/receive\n/send USDC address amount\n/rain USDC amount`;
+    reply = `🚀 *Welcome to BasePay*\n\nCommands:\n/start\n/balance\n/receive`;
   } else if (incomingMsg === '/receive') {
     reply = `📥 Your wallet address:\n${wallets[from].address}`;
   } else if (incomingMsg === '/balance') {
@@ -84,18 +62,18 @@ app.post('/gupshup', async (req, res) => {
     }
   }
 
-  // Default reply
-  res.json({ type: "text", message: reply });
+  // ✅ Respond using TwiML XML
+  res.set('Content-Type', 'text/xml');
+  res.send(`<Response><Message>${reply}</Message></Response>`);
 });
 
-// Helper to get token balance
+// Token Balance Fetch
 async function getTokenBalance(address, tokenAddress) {
   const contract = new ethers.Contract(tokenAddress, ERC20_ABI, provider);
   const raw = await contract.balanceOf(address);
   return ethers.formatUnits(raw, 6); // USDC/USDT decimals
 }
 
-// Start server
 app.listen(PORT, () => {
-  console.log(`🚀 BasePay Gupshup bot running on port ${PORT}`);
+  console.log(`🚀 BasePay running with Twilio on port ${PORT}`);
 });
