@@ -1,0 +1,86 @@
+export default function Home() {
+  return (
+    <main className="min-h-screen bg-blue-50 text-gray-800 font-sans">
+      {/* Hero Section */}
+      <section className="text-center py-24 bg-blue-600 text-white">
+        <h1 className="text-5xl font-bold mb-4">BaseBro</h1>
+        <p className="text-xl mb-8">Smart P2P Payments. Anywhere. Anytime.</p>
+        <a
+          href="https://wa.me/YOUR_NUMBER" // replace with your WhatsApp
+          className="bg-white text-blue-600 font-semibold px-6 py-3 rounded-full shadow hover:bg-blue-100 transition"
+        >
+          Try WhatsApp Demo
+        </a>
+      </section>
+
+      {/* How It Works */}
+      <section className="max-w-4xl mx-auto py-20 px-6">
+        <h2 className="text-3xl font-bold mb-10 text-center">How It Works</h2>
+        <div className="grid md:grid-cols-4 gap-8 text-center">
+          <div>
+            <div className="text-4xl">💬</div>
+            <h3 className="font-semibold mt-2">Chat</h3>
+            <p>Start on WhatsApp</p>
+          </div>
+          <div>
+            <div className="text-4xl">🤖</div>
+            <h3 className="font-semibold mt-2">AI Parses</h3>
+            <p>Intent is understood</p>
+          </div>
+          <div>
+            <div className="text-4xl">🛡️</div>
+            <h3 className="font-semibold mt-2">Escrow</h3>
+            <p>Lock funds securely</p>
+          </div>
+          <div>
+            <div className="text-4xl">✅</div>
+            <h3 className="font-semibold mt-2">Release</h3>
+            <p>Deal complete</p>
+          </div>
+        </div>
+      </section>
+
+      {/* Features */}
+      <section className="bg-white py-20">
+        <div className="max-w-5xl mx-auto px-6">
+          <h2 className="text-3xl font-bold mb-10 text-center">Why BaseBro?</h2>
+          <div className="grid md:grid-cols-3 gap-6">
+            <div className="bg-blue-100 p-6 rounded-xl">
+              <h3 className="font-bold text-xl mb-2">Walletless</h3>
+              <p>No wallet setup needed. Just chat & pay.</p>
+            </div>
+            <div className="bg-blue-100 p-6 rounded-xl">
+              <h3 className="font-bold text-xl mb-2">Gasless</h3>
+              <p>We sponsor fees so your users don't worry.</p>
+            </div>
+            <div className="bg-blue-100 p-6 rounded-xl">
+              <h3 className="font-bold text-xl mb-2">Escrow Protection</h3>
+              <p>Smart contract ensures funds are safe.</p>
+            </div>
+            <div className="bg-blue-100 p-6 rounded-xl">
+              <h3 className="font-bold text-xl mb-2">WhatsApp Assistant</h3>
+              <p>24/7 deal helper powered by AI.</p>
+            </div>
+            <div className="bg-blue-100 p-6 rounded-xl">
+              <h3 className="font-bold text-xl mb-2">Farcaster Frames</h3>
+              <p>Deal directly from social apps.</p>
+            </div>
+            <div className="bg-blue-100 p-6 rounded-xl">
+              <h3 className="font-bold text-xl mb-2">Multilingual</h3>
+              <p>Talk in your language, AI translates.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Footer */}
+      <footer className="text-center py-12 text-sm bg-blue-100 text-blue-800">
+        <p>© 2025 BaseBro. All rights reserved.</p>
+        <div className="mt-2 space-x-4">
+          <a href="https://github.com/Shijas786/basebro" className="hover:underline">GitHub</a>
+          <a href="mailto:contact@basebro.xyz" className="hover:underline">Email</a>
+        </div>
+      </footer>
+    </main>
+  );
+}
