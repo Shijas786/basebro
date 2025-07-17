@@ -1,6 +1,44 @@
+# Node modules
 node_modules/
+
+# Environment variables
 .env
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS / Editor junk
 .DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+
+# Build output
 dist/
-.next/
+build/
+
+# Runtime files
+*.pid
+*.seed
+*.pid.lock
+
+# Vercel
 .vercel/
+
+# Supabase
+supabase/.temp/
+supabase/migrations/.shadow/
+
+# Ignore local SQLite database (if used)
+*.db
+
+# Ignore environment config for testing/dev
+.env.local
+.env.development
+.env.test
+.env.production

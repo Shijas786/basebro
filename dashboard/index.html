@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>BaseBro Message Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js"></script>
+  <style>
+    body { font-family: sans-serif; margin: 20px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+    th, td { border: 1px solid #ddd; padding: 8px; }
+    th { background: #f0f0f0; }
+  </style>
+</head>
+<body>
+  <h1>📨 BaseBro Messages</h1>
+  <table id="messagesTable">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Sender</th>
+        <th>Message</th>
+        <th>Type</th>
+        <th>Action</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <script>
+    const supabase = supabase.createClient(
+      'https://pbhajvgihthoganmvpce.supabase.co',
+      'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBiaGFqdmdpaHRob2dhbm12cGNlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI3NDUwNDAsImV4cCI6MjA2ODMyMTA0MH0.qhLj_eymz_guzbFmy0pVyeJnZsHAcOw9GCnVuZc726Q' 
+    );
+
+    async function loadMessages() {
+      const { data, error } = await supabase
+        .from('messages')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+      if (error) return console.error(error);
+
+      const tbody = document.querySelector('#messagesTable tbody');
+      tbody.innerHTML = '';
+
+      data.forEach(msg => {
+        const row = document.createElement('tr');
+        row.innerHTML = `
+          <td>${new Date(msg.created_at).toLocaleString()}</td>
+          <td>${msg.sender}</td>
+          <td>${msg.message}</td>
+          <td>${msg.type}</td>
+          <td>${msg.action || ''}</td>
+          <td>${msg.status || ''}</td>
+        `;
+        tbody.appendChild(row);
+      });
+    }
+
+    loadMessages();
+    setInterval(loadMessages, 5000); // auto-refresh every 5s
+  </script>
+</body>
+</html>
