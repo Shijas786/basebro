@@ -1,146 +1,119 @@
-// index.js – BasePay (WhatsApp + AI + Supabase + Escrow + Gasless)
-require('dotenv').config();
-const express = require('express');
-const bodyParser = require('body-parser');
-const { ethers } = require('ethers');
-const { createClient } = require('@supabase/supabase-js');
-const { createSmartAccountClient } = require('@biconomy/account');
-const OpenAI = require("openai");
+// index.js - BaseBro WhatsApp Bot
+require("dotenv").config();
+const express = require("express");
+const bodyParser = require("body-parser");
+const { MessagingResponse } = require("twilio").twiml;
+const { createClient } = require("@supabase/supabase-js");
+const { Configuration, OpenAIApi } = require("openai");
+const { ethers } = require("ethers");
+const { parseMessage } = require("./lib/parser");
+const { sendUSDC, sendETH, checkBalance, lockEscrow, releaseEscrow } = require("./lib/chain");
+const { createSmartAccount } = require("./lib/wallet");
 
 const app = express();
 app.use(bodyParser.urlencoded({ extended: false }));
-const PORT = process.env.PORT || 3000;
 
-// Setup: Supabase
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
+// Setup
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+const configuration = new Configuration({ apiKey: process.env.OPENAI_KEY });
+const openai = new OpenAIApi(configuration);
 
-// Setup: OpenAI
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+app.post("/whatsapp", async (req, res) => {
+  const twiml = new MessagingResponse();
+  const msg = req.body.Body.trim().toLowerCase();
+  const from = req.body.From.replace("whatsapp:", "");
 
-// Setup: Blockchain
-const provider = new ethers.JsonRpcProvider(process.env.BASE_RPC);
-const USDC = process.env.USDC_ADDRESS;
-const ERC20_ABI = ["function balanceOf(address) view returns (uint)", "function transfer(address,uint) returns (bool)"];
-
-// Setup: Escrow Contract
-const ESCROW_ADDRESS = process.env.ESCROW_ADDRESS;
-const ESCROW_ABI = [
-  "function lock(address token, address receiver, uint amount) public",
-  "function release(uint escrowId) public",
-  "function cancel(uint escrowId) public"
-];
-
-// Health check
-app.get('/', (req, res) => {
-  res.send('✅ BasePay running on WhatsApp + Escrow + AI');
-});
-
-// WhatsApp webhook (from Twilio)
-app.post('/twilio', async (req, res) => {
-  const from = req.body.From?.replace('whatsapp:', '').trim();
-  const rawMsg = req.body.Body?.trim();
-  if (!from || !rawMsg) return res.send('<Response></Response>');
-
-  console.log(`📩 ${from}: ${rawMsg}`);
-
-  // Step 1: Load/create user wallet
-  let { data: user } = await supabase.from('users').select('*').eq('phone', from).single();
-  let signer;
-
+  // 1. Create wallet if new user
+  let { data: user, error } = await supabase.from("users").select("*").eq("phone", from).single();
   if (!user) {
-    const wallet = ethers.Wallet.createRandom();
-    signer = wallet.connect(provider);
-    await supabase.from('users').insert({
+    if (msg.includes("bro")) {
+      const smartWallet = await createSmartAccount(from);
+      await supabase.from("users").insert({ phone: from, address: smartWallet });
+      twiml.message(`👋 Welcome to BaseBro!
+Your smart wallet is ready: ${smartWallet}
+
+💸 Say "send 2 usdc to @raj" or "balance" to begin!`);
+    } else {
+      twiml.message(`👋 Welcome to BaseBro!
+We're your crypto bro for gasless, smart account-based payments on WhatsApp.
+
+💡 Say "bro" to create your wallet now.`);
+    }
+    return res.send(twiml.toString());
+  }
+
+  // 2. Check balance
+  if (msg.includes("balance")) {
+    const bal = await checkBalance(user.address);
+    twiml.message(`💰 Balance for ${user.address}:
+${bal}`);
+    return res.send(twiml.toString());
+  }
+
+  // 3. Transaction history
+  if (msg.includes("history")) {
+    const { data: txs } = await supabase.from("transactions").select("*").eq("phone", from);
+    if (!txs || txs.length === 0) {
+      twiml.message("📜 No transaction history yet.");
+    } else {
+      let msgText = "📜 Transaction History:\n";
+      txs.forEach(t => {
+        msgText += `• ${t.type} ${t.amount} ${t.token} to ${t.to} (${t.status})\n`;
+      });
+      twiml.message(msgText);
+    }
+    return res.send(twiml.toString());
+  }
+
+  // 4. Parse message with OpenAI
+  const parsed = await parseMessage(msg, openai);
+  if (parsed.type === "send") {
+    const result = parsed.token === "usdc"
+      ? await sendUSDC(user.address, parsed.to, parsed.amount)
+      : await sendETH(user.address, parsed.to, parsed.amount);
+
+    await supabase.from("transactions").insert({
       phone: from,
-      wallet_pk: wallet.privateKey,
-      address: wallet.address
-    });
-  } else {
-    signer = new ethers.Wallet(user.wallet_pk, provider);
-  }
-
-  // Step 2: Parse AI message
-  const aiReply = await parseMessage(rawMsg, from, signer);
-
-  // Step 3: Send response back to WhatsApp
-  res.set('Content-Type', 'text/xml');
-  res.send(`<Response><Message>${aiReply}</Message></Response>`);
-});
-
-async function parseMessage(msg, from, signer) {
-  try {
-    const prompt = `You are a blockchain assistant. Convert this WhatsApp message into a JSON action:\n"${msg}"\nRespond ONLY with:\n{action: "balance"}\n{action: "receive"}\n{action: "send", token: "usdc", to: "+91xxxx", amount: "5"}\n{action: "escrow", token: "usdc", to: "+91xxxx", amount: "3"}`;
-
-    const ai = await openai.chat.completions.create({
-      model: "gpt-4",
-      messages: [{ role: "user", content: prompt }],
+      type: "send",
+      amount: parsed.amount,
+      token: parsed.token,
+      to: parsed.to,
+      status: result.success ? "sent" : "failed"
     });
 
-    const json = JSON.parse(ai.choices[0].message.content);
-
-    if (json.action === "balance") {
-      return await checkBalance(signer);
-    }
-
-    if (json.action === "receive") {
-      return `📥 Your wallet address:\n${signer.address}`;
-    }
-
-    if (json.action === "send") {
-      const { data: receiver } = await supabase.from('users').select('*').eq('phone', json.to).single();
-      if (!receiver) return `⚠️ User ${json.to} not found on BasePay.`;
-      const tx = await sendUSDC(signer, receiver.address, json.amount);
-      return `✅ Sent ${json.amount} USDC to ${json.to}\n🔗 Tx: https://basescan.org/tx/${tx}`;
-    }
-
-    if (json.action === "escrow") {
-      const { data: receiver } = await supabase.from('users').select('*').eq('phone', json.to).single();
-      if (!receiver) return `⚠️ User ${json.to} not found.`;
-      const escrowId = await lockEscrow(signer, receiver.address, json.amount);
-      return `🔐 Escrow of ${json.amount} USDC created.\nEscrow ID: ${escrowId}`;
-    }
-
-    return "❓ Unknown action.";
-  } catch (e) {
-    console.error('❌ AI parse error:', e);
-    return "🤖 Sorry, I couldn't understand your request.";
+    twiml.message(result.success
+      ? `✅ Sent ${parsed.amount} ${parsed.token.toUpperCase()} to ${parsed.to}`
+      : `❌ Failed to send ${parsed.token}`);
+    return res.send(twiml.toString());
   }
-}
 
-async function checkBalance(signer) {
-  const usdc = new ethers.Contract(USDC, ERC20_ABI, provider);
-  const raw = await usdc.balanceOf(signer.address);
-  const ethBal = await provider.getBalance(signer.address);
-  return `💰 Balance:\nETH: ${(ethBal / 1e18).toFixed(4)}\nUSDC: ${ethers.formatUnits(raw, 6)}`;
-}
+  // 5. P2P Escrow Lock
+  if (parsed.type === "escrow") {
+    const locked = await lockEscrow(user.address, parsed.to, parsed.amount);
+    await supabase.from("transactions").insert({
+      phone: from,
+      type: "escrow",
+      amount: parsed.amount,
+      token: parsed.token,
+      to: parsed.to,
+      status: locked ? "locked" : "fail"
+    });
+    twiml.message(locked
+      ? `🔒 Locked ${parsed.amount} ${parsed.token} in escrow with ${parsed.to}`
+      : `❌ Escrow failed`);
+    return res.send(twiml.toString());
+  }
 
-async function sendUSDC(signer, to, amount) {
-  const smartAccount = await createSmartAccountClient({
-    signer,
-    chainId: 8453,
-    bundlerUrl: process.env.BICONOMY_BUNDLER_URL,
-    paymaster: {
-      paymasterUrl: `https://paymaster.biconomy.io/api/v1/${process.env.BICONOMY_API_KEY}`
-    }
-  });
+  // 6. Group Tip / Rain
+  if (parsed.type === "tip" || parsed.type === "rain") {
+    // Simulated group tip
+    twiml.message(`🎉 Tipped ${parsed.amount} ${parsed.token} to random group members!`);
+    return res.send(twiml.toString());
+  }
 
-  const iface = new ethers.Interface(ERC20_ABI);
-  const tx = {
-    to: USDC,
-    data: iface.encodeFunctionData("transfer", [to, ethers.parseUnits(amount, 6)])
-  };
-
-  const op = await smartAccount.sendTransaction(tx);
-  return await op.waitForTxHash();
-}
-
-async function lockEscrow(signer, receiver, amount) {
-  const escrow = new ethers.Contract(ESCROW_ADDRESS, ESCROW_ABI, signer);
-  const tx = await escrow.lock(USDC, receiver, ethers.parseUnits(amount, 6));
-  const receipt = await tx.wait();
-  return receipt.logs[0].topics[1]; // Escrow ID
-}
-
-app.listen(PORT, () => {
-  console.log(`🚀 BasePay WhatsApp P2P running on http://localhost:${PORT}`);
+  // 7. Unknown
+  twiml.message("🤖 Sorry, I didn’t understand that. Try: \n- 'send 2 usdc to @raj'\n- 'balance'\n- 'history'\n- 'escrow 5 eth to @anil'");
+  res.send(twiml.toString());
 });
+
+app.listen(3000, () => console.log("🚀 BaseBro running on port 3000"));

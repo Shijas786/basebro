@@ -1,0 +1,37 @@
+[
+  {
+    "inputs": [
+      {"internalType": "address", "name": "buyer", "type": "address"},
+      {"internalType": "address", "name": "seller", "type": "address"},
+      {"internalType": "address", "name": "token", "type": "address"},
+      {"internalType": "uint256", "name": "amount", "type": "uint256"}
+    ],
+    "name": "lock",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "release",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "refund",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "getState",
+    "outputs": [
+      {"internalType": "uint8", "name": "", "type": "uint8"}
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  }
+]
