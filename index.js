@@ -1,119 +1,113 @@
-// index.js - BaseBro WhatsApp Bot
-require("dotenv").config();
-const express = require("express");
-const bodyParser = require("body-parser");
-const { MessagingResponse } = require("twilio").twiml;
-const { createClient } = require("@supabase/supabase-js");
-const { Configuration, OpenAIApi } = require("openai");
-const { ethers } = require("ethers");
-const { parseMessage } = require("./lib/parser");
-const { sendUSDC, sendETH, checkBalance, lockEscrow, releaseEscrow } = require("./lib/chain");
-const { createSmartAccount } = require("./lib/wallet");
+require('dotenv').config();
+
+const express = require('express');
+const bodyParser = require('body-parser');
+
+const supabase = require('./lib/supabase'); // ✅ This file should create and export the Supabase client
+
+const { parseMessage } = require('./lib/ai');
+const { createOrGetWallet } = require('./lib/wallet');
+const { sendETH, sendUSDC, tipGroup, rainGroup, startEscrow } = require('./lib/chain');
 
 const app = express();
 app.use(bodyParser.urlencoded({ extended: false }));
+app.use(bodyParser.json());
 
-// Setup
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
-const configuration = new Configuration({ apiKey: process.env.OPENAI_KEY });
-const openai = new OpenAIApi(configuration);
 
-app.post("/whatsapp", async (req, res) => {
-  const twiml = new MessagingResponse();
-  const msg = req.body.Body.trim().toLowerCase();
-  const from = req.body.From.replace("whatsapp:", "");
+const findWalletByNameOrPhone = async (query) => {
+  let { data, error } = await supabase
+    .from('users')
+    .select('wallet_address')
+    .ilike('name', `%${query}%`)
+    .maybeSingle();
 
-  // 1. Create wallet if new user
-  let { data: user, error } = await supabase.from("users").select("*").eq("phone", from).single();
-  if (!user) {
-    if (msg.includes("bro")) {
-      const smartWallet = await createSmartAccount(from);
-      await supabase.from("users").insert({ phone: from, address: smartWallet });
-      twiml.message(`👋 Welcome to BaseBro!
-Your smart wallet is ready: ${smartWallet}
+  if (data?.wallet_address) return data.wallet_address;
 
-💸 Say "send 2 usdc to @raj" or "balance" to begin!`);
-    } else {
-      twiml.message(`👋 Welcome to BaseBro!
-We're your crypto bro for gasless, smart account-based payments on WhatsApp.
+  let { data: data2 } = await supabase
+    .from('users')
+    .select('wallet_address')
+    .eq('phone', query)
+    .maybeSingle();
 
-💡 Say "bro" to create your wallet now.`);
-    }
-    return res.send(twiml.toString());
-  }
+  return data2?.wallet_address || null;
+};
 
-  // 2. Check balance
-  if (msg.includes("balance")) {
-    const bal = await checkBalance(user.address);
-    twiml.message(`💰 Balance for ${user.address}:
-${bal}`);
-    return res.send(twiml.toString());
-  }
-
-  // 3. Transaction history
-  if (msg.includes("history")) {
-    const { data: txs } = await supabase.from("transactions").select("*").eq("phone", from);
-    if (!txs || txs.length === 0) {
-      twiml.message("📜 No transaction history yet.");
-    } else {
-      let msgText = "📜 Transaction History:\n";
-      txs.forEach(t => {
-        msgText += `• ${t.type} ${t.amount} ${t.token} to ${t.to} (${t.status})\n`;
-      });
-      twiml.message(msgText);
-    }
-    return res.send(twiml.toString());
-  }
-
-  // 4. Parse message with OpenAI
-  const parsed = await parseMessage(msg, openai);
-  if (parsed.type === "send") {
-    const result = parsed.token === "usdc"
-      ? await sendUSDC(user.address, parsed.to, parsed.amount)
-      : await sendETH(user.address, parsed.to, parsed.amount);
-
-    await supabase.from("transactions").insert({
-      phone: from,
-      type: "send",
-      amount: parsed.amount,
-      token: parsed.token,
-      to: parsed.to,
-      status: result.success ? "sent" : "failed"
+const registerUser = async (phone, name, walletAddress) => {
+  await supabase
+    .from('users')
+    .upsert([{ phone, name, wallet_address: walletAddress }], {
+      onConflict: ['phone'],
     });
+};
 
-    twiml.message(result.success
-      ? `✅ Sent ${parsed.amount} ${parsed.token.toUpperCase()} to ${parsed.to}`
-      : `❌ Failed to send ${parsed.token}`);
-    return res.send(twiml.toString());
+const logMessage = async (phone, message, type = 'text') => {
+  await supabase.from('messages').insert([{ phone, message, type }]);
+};
+
+app.post('/webhook', async (req, res) => {
+  const msg = req.body.Body?.trim();
+  const from = req.body.From?.replace('whatsapp:', '');
+  const name = req.body.ProfileName || 'User';
+
+  await logMessage(from, msg);
+
+  const reply = (text) => res.send(`<Response><Message>${text}</Message></Response>`);
+
+  const { wallet, smartAccount } = await createOrGetWallet(from);
+  await registerUser(from, name, smartAccount.address);
+
+  if (!msg) return reply('❌ No message received.');
+  if (msg.toLowerCase() === 'hi' || msg.toLowerCase().includes('bro')) {
+    return reply(`👋 Hey ${name}! I'm BaseBro, your crypto buddy.\n\nTry:\n• Send 5 USDC to Priya\n• Tip group 0.1 ETH\n• Lock 10 USDC in escrow`);
   }
 
-  // 5. P2P Escrow Lock
-  if (parsed.type === "escrow") {
-    const locked = await lockEscrow(user.address, parsed.to, parsed.amount);
-    await supabase.from("transactions").insert({
-      phone: from,
-      type: "escrow",
-      amount: parsed.amount,
-      token: parsed.token,
-      to: parsed.to,
-      status: locked ? "locked" : "fail"
-    });
-    twiml.message(locked
-      ? `🔒 Locked ${parsed.amount} ${parsed.token} in escrow with ${parsed.to}`
-      : `❌ Escrow failed`);
-    return res.send(twiml.toString());
-  }
+  const parsed = await parseMessage(msg);
+  if (!parsed) return reply('🤖 Sorry, I couldn’t understand. Try saying “Send 1 USDC to Arjun”.');
 
-  // 6. Group Tip / Rain
-  if (parsed.type === "tip" || parsed.type === "rain") {
-    // Simulated group tip
-    twiml.message(`🎉 Tipped ${parsed.amount} ${parsed.token} to random group members!`);
-    return res.send(twiml.toString());
-  }
+  try {
+    if (parsed.action === 'send') {
+      const to = await findWalletByNameOrPhone(parsed.to);
+      if (!to) return reply(`❌ Couldn’t find wallet for: ${parsed.to}`);
+      const tx = parsed.token === 'ETH'
+        ? await sendETH(smartAccount, to, parsed.amount)
+        : await sendUSDC(smartAccount, to, parsed.amount);
+      return reply(`✅ Sent ${parsed.amount} ${parsed.token} to ${parsed.to}\n🔗 ${tx}`);
+    }
 
-  // 7. Unknown
-  twiml.message("🤖 Sorry, I didn’t understand that. Try: \n- 'send 2 usdc to @raj'\n- 'balance'\n- 'history'\n- 'escrow 5 eth to @anil'");
-  res.send(twiml.toString());
+    if (parsed.action === 'tip') {
+      const tx = await tipGroup(smartAccount, parsed.amount, parsed.token);
+      return reply(`💸 Tipped group: ${parsed.amount} ${parsed.token}\n🔗 ${tx}`);
+    }
+
+    if (parsed.action === 'rain') {
+      const tx = await rainGroup(smartAccount, parsed.amount, parsed.token);
+      return reply(`🌧️ Rained on group: ${parsed.amount} ${parsed.token}\n🔗 ${tx}`);
+    }
+
+    if (parsed.action === 'escrow') {
+      const tx = await startEscrow(smartAccount, parsed.amount, parsed.token);
+      return reply(`🔒 Locked in escrow: ${parsed.amount} ${parsed.token}\n🔗 ${tx}`);
+    }
+
+    return reply('🤖 Unrecognized command. Try “Send 2 USDC to +911234567890”');
+  } catch (err) {
+    console.error(err);
+    return reply('⚠️ Something went wrong: ' + err.message);
+  }
 });
 
-app.listen(3000, () => console.log("🚀 BaseBro running on port 3000"));
+app.listen(3000, () => console.log('🚀 BaseBro running on http://localhost:3000'));
+// 👇 Home route for Vercel to avoid 404 errors
+app.get('/', (req, res) => {
+  res.send('🚀 BaseBro WhatsApp bot is running!');
+});
+
+// ✅ Start the server only if not in serverless (Vercel handles it differently)
+if (require.main === module) {
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`🚀 BaseBro running on http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app; // For Vercel serverless

@@ -2,35 +2,10 @@
   "name": "basebro",
   "version": "1.0.0",
   "description": "WhatsApp-based P2P Escrow Bot with Smart Wallet, Gasless UX, and AI",
-  "main": "index.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node index.js",
-    "dev": "nodemon index.js"
+    "dev": "nodemon api/index.js"
   },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/shijas786/basepay-whatsapp-bot.git"
-  },
-  "keywords": [
-    "web3",
-    "whatsapp",
-    "bot",
-    "escrow",
-    "biconomy",
-    "supabase",
-    "openai",
-    "twilio",
-    "express",
-    "ethereum",
-    "base"
-  ],
-  "author": "Shijas T",
-  "license": "MIT",
-  "bugs": {
-    "url": "https://github.com/shijas786/basepay-whatsapp-bot/issues"
-  },
-  "homepage": "https://github.com/shijas786/basepay-whatsapp-bot#readme",
   "dependencies": {
     "@biconomy/account": "^4.5.7",
     "@biconomy/core-types": "^3.1.4",
@@ -38,7 +13,7 @@
     "axios": "^1.10.0",
     "body-parser": "^2.2.0",
     "dotenv": "^17.1.0",
-    "ethers": "^6.15.0",
+    "ethers": "^5.8.0",
     "express": "^5.1.0",
     "openai": "^5.10.1",
     "qrcode": "^1.5.4",
