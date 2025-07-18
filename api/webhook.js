@@ -42,3 +42,15 @@ module.exports = async (req, res) => {
     res.status(500).send('Internal Server Error');
   }
 };
+// api/webhook.js
+
+export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).send('Method Not Allowed');
+  }
+
+  console.log('Incoming message:', req.body);
+
+  // Just echo back message (Twilio will retry if no 200)
+  res.status(200).send('OK');
+}
