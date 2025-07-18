@@ -10,16 +10,17 @@ export const config = {
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
-    return res.status(405).send('Only POST requests allowed');
+    return res.status(405).json({ error: 'Only POST allowed' });
   }
 
   try {
-    console.log('Twilio payload:', req.body);
+    console.log('Incoming Message:', req.body);
 
-    // Send a response back
-    return res.status(200).json({ status: 'received' });
-  } catch (error) {
-    console.error('Error in webhook:', error);
+    // ✅ You can handle Twilio WhatsApp message here
+    // For now, just return success
+    return res.status(200).json({ message: 'Received!' });
+  } catch (err) {
+    console.error('Webhook Error:', err);
     return res.status(500).json({ error: 'Internal Server Error' });
   }
 }
