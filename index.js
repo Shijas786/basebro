@@ -2,6 +2,7 @@ require('dotenv').config();
 
 const express = require('express');
 const bodyParser = require('body-parser');
+const path = require('path');
 
 const supabase = require('./lib/supabase'); // ✅ This file should create and export the Supabase client
 
@@ -12,6 +13,9 @@ const { sendETH, sendUSDC, tipGroup, rainGroup, startEscrow } = require('./lib/c
 const app = express();
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
+
+// Serve static files from public directory
+app.use(express.static(path.join(__dirname, 'public')));
 
 
 const findWalletByNameOrPhone = async (query) => {
@@ -97,9 +101,9 @@ app.post('/webhook', async (req, res) => {
 });
 
 app.listen(3000, () => console.log('🚀 BaseBro running on http://localhost:3000'));
-// 👇 Home route for Vercel to avoid 404 errors
+// 👇 Home route serves the landing page
 app.get('/', (req, res) => {
-  res.send('🚀 BaseBro WhatsApp bot is running!');
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 // ✅ Start the server only if not in serverless (Vercel handles it differently)
